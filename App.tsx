@@ -1,5 +1,6 @@
 import * as React from "react";
 import {
+  AsyncStorage,
   Text,
   View,
   StyleSheet,
@@ -7,10 +8,16 @@ import {
   Button,
   Alert,
   ActivityIndicator,
-  Platform
+  Platform,
+  FlatList
 } from "react-native";
 import * as FirebaseRecaptcha from "expo-firebase-recaptcha";
 import * as firebase from "firebase";
+import 'firebase/firestore';
+
+import { NavigationContainer } from '@react-navigation/native';
+import { createStackNavigator } from '@react-navigation/stack';
+import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 
 // PROVIDE VALID FIREBASE CONFIG HERE
 // https://firebase.google.com/docs/web/setup
@@ -28,12 +35,165 @@ const FIREBASE_CONFIG: any = {
 try {
   if (FIREBASE_CONFIG.apiKey) {
     firebase.initializeApp(FIREBASE_CONFIG);
+    // firebase.auth().settings.appVerificationDisabled = true
   }
 } catch (err) {
   // ignore app already initialized error on snack
 }
 
-export default function PhoneAuthScreen() {
+const db = firebase.firestore();
+
+const Stack = createStackNavigator();
+const Tab = createBottomTabNavigator();
+
+const AuthContext = React.createContext();
+
+function SplashScreen() {
+  return (
+    <View>
+      <Text>Loading...</Text>
+    </View>
+  );
+}
+
+function HomeScreen() {
+  return (
+    <Tab.Navigator>
+      <Tab.Screen name="Feed" component={Feed} />
+      <Tab.Screen name="Contacts" component={ContactsScreen} />
+    </Tab.Navigator>
+  );
+}
+
+function Feed() {
+
+  var Stops = [];
+
+
+  db.collection('stops').get()
+    .then(querySnapshot => {
+      querySnapshot.docs.forEach(doc => {
+        console.log(doc.data());
+
+        let unix_timestamp = doc.data().timestamp.seconds
+        var date = new Date(unix_timestamp);
+        var hours = date.getHours();
+        var minutes = "0" + date.getMinutes();
+        var seconds = "0" + date.getSeconds();
+        var formattedTime = hours + ':' + minutes.substr(-2) + ':' + seconds.substr(-2);
+        console.log(doc.id)
+        Stops.push({
+            id: doc.id,
+            title: doc.data().creatorId,
+            message: formattedTime
+        });        
+    });
+  });
+  
+  const styles = StyleSheet.create({
+    title: {
+      fontSize: 24,
+      color: '#3F3F3F',
+    },
+    subtitle: {
+      color: '#A5A5A5',
+    },
+  })
+  
+
+  type ContactRowProps = React.ComponentProps<typeof ContactRow>;
+
+
+  function renderItem({ item }: { item: ContactRowProps }) {
+    return <ContactRow {...item} />;
+  }
+  
+  function keyExtractor(item: ContactRowProps) {
+    return item.id.toString();
+  }
+  
+  return (
+    <FlatList
+      data={Stops}
+      renderItem={renderItem}
+      keyExtractor={keyExtractor}
+      ItemSeparatorComponent={() => (
+        <View style={{ height: StyleSheet.hairlineWidth }} />
+      )}
+    />
+  );
+
+  // const { signOut } = React.useContext(AuthContext);
+
+  // return (
+  //   <View>
+  //     <Text>Signed in!</Text>
+  //     <Button title="Sign out" onPress={signOut} />
+  //   </View>
+  // );
+}
+
+import { ContactRow } from './components/contactrow';
+import * as Contacts from 'expo-contacts';
+
+
+function ContactsScreen() {
+  var People = [];
+
+  const styles = StyleSheet.create({
+    title: {
+      fontSize: 24,
+      color: '#3F3F3F',
+    },
+    subtitle: {
+      color: '#A5A5A5',
+    },
+  })
+  
+  React.useEffect(() => {
+    (async () => {
+      const { status } = await Contacts.requestPermissionsAsync();
+      if (status === 'granted') {
+        const { data } = await Contacts.getContactsAsync({
+          fields: [Contacts.Fields.PhoneNumbers],
+        });
+
+        data.forEach(function (contact) {
+          People.push({
+            id: contact.id,
+            title: contact.name,
+            message: contact.phoneNumbers?.[0].number
+          })
+        }); 
+      }
+    })();
+  }, []);
+
+
+  type ContactRowProps = React.ComponentProps<typeof ContactRow>;
+
+
+  function renderItem({ item }: { item: ContactRowProps }) {
+    return <ContactRow {...item} />;
+  }
+  
+  function keyExtractor(item: ContactRowProps) {
+    return item.id.toString();
+  }
+  
+  return (
+    <FlatList
+      data={People}
+      renderItem={renderItem}
+      keyExtractor={keyExtractor}
+      ItemSeparatorComponent={() => (
+        <View style={{ height: StyleSheet.hairlineWidth }} />
+      )}
+    />
+  );
+}
+
+function PhoneAuthScreen() {
   const recaptchaVerifier = React.useRef(null);
   const verificationCodeTextInput = React.useRef(null);
   const [phoneNumber, setPhoneNumber] = React.useState("");
@@ -45,6 +205,8 @@ export default function PhoneAuthScreen() {
   const [confirmInProgress, setConfirmInProgress] = React.useState(false);
   const isConfigValid = !!FIREBASE_CONFIG.apiKey;
 
+  const { signIn } = React.useContext(AuthContext);
+
   return (
     <View style={styles.container}>
       <View style={styles.content}>
@@ -52,8 +214,8 @@ export default function PhoneAuthScreen() {
           ref={recaptchaVerifier}
           firebaseConfig={FIREBASE_CONFIG}
         />
-        <Text style={styles.title}>Firebase Phone Auth</Text>
-        <Text style={styles.subtitle}>using expo-firebase-recaptcha</Text>
+        <Text style={styles.title}>Stop Stream</Text>
+        <Text style={styles.subtitle}>Safety. Community. Accountability.</Text>
         <Text style={styles.text}>Enter phone number</Text>
         <TextInput
           style={styles.textInput}
@@ -125,7 +287,7 @@ export default function PhoneAuthScreen() {
               setVerificationId("");
               setVerificationCode("");
               verificationCodeTextInput.current?.clear();
-              Alert.alert("Phone authentication successful!");
+              signIn({ })
             } catch (err) {
               setConfirmError(err);
               setConfirmInProgress(false);
@@ -198,3 +360,109 @@ const styles = StyleSheet.create({
     fontWeight: "bold",
   },
 });
+
+
+export default function App({ navigation }) {
+  const [state, dispatch] = React.useReducer(
+    (prevState, action) => {
+      switch (action.type) {
+        case 'RESTORE_TOKEN':
+          return {
+            ...prevState,
+            userToken: action.token,
+            isLoading: false,
+          };
+        case 'SIGN_IN':
+          return {
+            ...prevState,
+            isSignout: false,
+            userToken: action.token,
+          };
+        case 'SIGN_OUT':
+          return {
+            ...prevState,
+            isSignout: true,
+            userToken: null,
+          };
+      }
+    },
+    {
+      isLoading: true,
+      isSignout: false,
+      userToken: null,
+    }
+  );
+
+  React.useEffect(() => {
+    // Fetch the token from storage then navigate to our appropriate place
+    const bootstrapAsync = async () => {
+      let userToken;
+
+      try {
+        userToken = await AsyncStorage.getItem('userToken');
+      } catch (e) {
+        // Restoring token failed
+      }
+
+      // After restoring token, we may need to validate it in production apps
+
+      // This will switch to the App screen or Auth screen and this loading
+      // screen will be unmounted and thrown away.
+      dispatch({ type: 'RESTORE_TOKEN', token: userToken });
+    };
+
+    bootstrapAsync();
+  }, []);
+
+  const authContext = React.useMemo(
+    () => ({
+      signIn: async data => {
+        // In a production app, we need to send some data (usually username, password) to server and get a token
+        // We will also need to handle errors if sign in failed
+        // After getting token, we need to persist the token using `AsyncStorage`
+        // In the example, we'll use a dummy token
+
+        dispatch({ type: 'SIGN_IN', token: 'dummy-auth-token' });
+      },
+      signOut: () => dispatch({ type: 'SIGN_OUT' }),
+      signUp: async data => {
+        // In a production app, we need to send user data to server and get a token
+        // We will also need to handle errors if sign up failed
+        // After getting token, we need to persist the token using `AsyncStorage`
+        // In the example, we'll use a dummy token
+
+        dispatch({ type: 'SIGN_IN', token: 'dummy-auth-token' });
+      },
+    }),
+    []
+  );
+
+  return (
+    <AuthContext.Provider value={authContext}>
+      <NavigationContainer>
+        <Stack.Navigator>
+          {state.isLoading ? (
+            // We haven't finished checking for the token yet
+            <Stack.Screen name="Splash" component={SplashScreen} />
+          ) : state.userToken == null ? (
+            // No token found, user isn't signed in
+            <Stack.Screen
+              name="SignIn"
+              component={PhoneAuthScreen}
+              options={{
+                title: 'Sign in',
+            // When logging out, a pop animation feels intuitive
+                animationTypeForReplace: state.isSignout ? 'pop' : 'push',
+              }}
+            />
+          ) : (
+            // User is signed in
+            <Stack.Screen name="Home" component={HomeScreen} />
+          )}
+        </Stack.Navigator>
+      </NavigationContainer>
+    </AuthContext.Provider>
+  );
+}
+
+
